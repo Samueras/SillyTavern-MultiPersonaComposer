@@ -1,7 +1,7 @@
 {
   "display_name": "Multi Persona Composer",
   "author": "Thomas + GPT",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "loading_order": 101,
   "generate_interceptor": "multi_persona_compose_interceptor",
   "js": "index.js",

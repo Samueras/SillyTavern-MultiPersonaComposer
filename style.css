@@ -15,7 +15,6 @@
 }
 
 #mpc-panel #mpc-search {
-  width: 100%;
   margin: 6px 0 8px;
 }
 
@@ -57,4 +56,14 @@
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 8px;
+}
+
+#mpc-panel .menu_button {
+  background-color: var(--SmartThemeBlurTintColor);
+  color: var(--SmartThemeBodyColor);
+  border: 1px solid var(--SmartThemeBorderColor);
+}
+
+#mpc-panel .menu_button:hover {
+  background-color: var(--black70a);
 }

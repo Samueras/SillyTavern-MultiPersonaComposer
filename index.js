@@ -402,7 +402,7 @@
                 <div class="mpc-note">Main persona comes from normal SillyTavern selector. Selected items below are added on top.</div>
                 <div id="mpc-active-scope" class="mpc-scope-status"></div>
                 <div id="mpc-usage-scope" class="mpc-scope-status"></div>
-                <input id="${SEARCH_ID}" type="text" placeholder="Filter personas...">
+                <input id="${SEARCH_ID}" class="text_pole width100p flex1 margin0" type="search" placeholder="Filter personas...">
                 <div id="${LIST_ID}" class="mpc-persona-list"></div>
                 <div class="mpc-actions">
                     <button id="mpc-save-default" class="menu_button interactable">Set default extras</button>
