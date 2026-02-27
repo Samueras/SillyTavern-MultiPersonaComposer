@@ -1,0 +1,60 @@
+#mpc-panel {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--SmartThemeBorderColor);
+}
+
+#mpc-panel .mpc-header {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+#mpc-panel .mpc-toggle {
+  display: block;
+  margin: 4px 0;
+}
+
+#mpc-panel #mpc-search {
+  width: 100%;
+  margin: 6px 0 8px;
+}
+
+#mpc-panel .mpc-note {
+  margin: 6px 0;
+  opacity: 0.8;
+  font-size: 0.9em;
+}
+
+#mpc-panel .mpc-scope-status {
+  margin: 4px 0 8px;
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+
+#mpc-panel .mpc-persona-list {
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--SmartThemeBorderColor);
+  border-radius: 6px;
+  padding: 6px;
+}
+
+#mpc-panel .mpc-persona-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+
+#mpc-panel .mpc-persona-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#mpc-panel .mpc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
