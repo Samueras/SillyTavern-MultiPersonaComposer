@@ -4,6 +4,8 @@
     const LIST_ID = 'mpc-persona-list';
     const SEARCH_ID = 'mpc-search';
     const CHAT_META_KEY = 'mpc_selected_persona_ids';
+    const ADVANCED_COLLAPSE_KEY = 'mpc_advanced_expanded';
+    const USAGE_COLLAPSE_KEY = 'mpc_usage_expanded';
 
     if (window.__multiPersonaComposerLoaded) {
         return;
@@ -31,6 +33,7 @@
                 editorSelectedPersonaIds: [],
                 characterSelections: {},
                 headersMigratedToDefaultOff: true,
+                advancedCollapsedDefaultMigrated: true,
             };
             context.saveSettingsDebounced();
         }
@@ -48,6 +51,14 @@
                 store[EXTENSION_KEY].showHeaders = false;
             }
             store[EXTENSION_KEY].headersMigratedToDefaultOff = true;
+            context.saveSettingsDebounced();
+        }
+
+        // One-time migration: advanced drawer default changed to collapsed.
+        // This updates older installs that may still have it expanded by default.
+        if (!store[EXTENSION_KEY].advancedCollapsedDefaultMigrated) {
+            context.accountStorage?.setItem(ADVANCED_COLLAPSE_KEY, 'false');
+            store[EXTENSION_KEY].advancedCollapsedDefaultMigrated = true;
             context.saveSettingsDebounced();
         }
 
@@ -131,6 +142,30 @@
         return normalizePersonaIdArray(settings.editorSelectedPersonaIds, context.powerUserSettings);
     }
 
+    function getAdvancedExpanded(context) {
+        const raw = context.accountStorage?.getItem(ADVANCED_COLLAPSE_KEY);
+        if (raw === null || raw === undefined) {
+            return false;
+        }
+        return String(raw) === 'true';
+    }
+
+    function setAdvancedExpanded(context, expanded) {
+        context.accountStorage?.setItem(ADVANCED_COLLAPSE_KEY, String(!!expanded));
+    }
+
+    function getUsageExpanded(context) {
+        const raw = context.accountStorage?.getItem(USAGE_COLLAPSE_KEY);
+        if (raw === null || raw === undefined) {
+            return true;
+        }
+        return String(raw) === 'true';
+    }
+
+    function setUsageExpanded(context, expanded) {
+        context.accountStorage?.setItem(USAGE_COLLAPSE_KEY, String(!!expanded));
+    }
+
     function arePersonaArraysEqual(a, b) {
         if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
             return false;
@@ -171,10 +206,95 @@
         return labels;
     }
 
+    function getCurrentEntityDisplay(context) {
+        if (context.groupId) {
+            const group = (context.groups || []).find((g) => String(g.id) === String(context.groupId));
+            return {
+                name: group?.name || 'Group',
+                avatar: String(group?.avatar_url || ''),
+            };
+        }
+
+        const characterId = Number(context.characterId);
+        if (Number.isFinite(characterId) && characterId >= 0) {
+            const character = context.characters?.[characterId];
+            return {
+                name: character?.name || 'Character',
+                avatar: character?.avatar ? context.getThumbnailUrl('avatar', character.avatar) : '',
+            };
+        }
+
+        return {
+            name: 'No target selected',
+            avatar: '',
+        };
+    }
+
+    function renderUsageTargets(context) {
+        const target = document.getElementById('mpc-usage-targets');
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+
+        target.innerHTML = '';
+
+        const labels = getUsageLabelsForEditorSelection(context);
+        if (!labels.length) {
+            target.textContent = 'Current selection is not saved to chat/character/default.';
+            target.classList.add('mpc-empty-usage');
+            return;
+        }
+
+        target.classList.remove('mpc-empty-usage');
+        const entity = getCurrentEntityDisplay(context);
+
+        for (const label of labels) {
+            const card = document.createElement('div');
+            card.className = 'mpc-usage-card';
+
+            const avatar = document.createElement('div');
+            avatar.className = 'avatar';
+
+            if (label === 'Default') {
+                avatar.innerHTML = '<i class="fa-solid fa-user"></i>';
+            } else if (entity.avatar) {
+                const img = document.createElement('img');
+                img.src = entity.avatar;
+                img.alt = entity.name;
+                avatar.appendChild(img);
+            } else {
+                avatar.innerHTML = '<i class="fa-solid fa-user-group"></i>';
+            }
+
+            const text = document.createElement('div');
+            text.className = 'mpc-usage-text';
+            text.textContent = `${label}: ${label === 'Default' ? 'Global' : entity.name}`;
+
+            card.append(avatar, text);
+            target.appendChild(card);
+        }
+    }
+
     function setEditorSelection(context, ids) {
         const settings = getSettings(context);
         settings.editorSelectedPersonaIds = normalizePersonaIdArray(ids, context.powerUserSettings);
         context.saveSettingsDebounced();
+    }
+
+    function getPersonaTagsState(context) {
+        const ext = context.extensionSettings || {};
+        const globalSettings = context.settings || {};
+        const tagMap = ext.persona_tag_map || globalSettings.persona_tag_map;
+        const tags = ext.persona_tags || globalSettings.persona_tags;
+
+        if (!tagMap || typeof tagMap !== 'object' || !Array.isArray(tags)) {
+            return null;
+        }
+
+        return {
+            tagMap,
+            tagsById: Object.fromEntries(tags.map((tag) => [tag.id, tag])),
+        };
     }
 
     function descriptorsMatchCurrentState(power, descriptor) {
@@ -289,6 +409,7 @@ ${item.description}` : item.description)
 
         const settings = getSettings(context);
         const power = context.powerUserSettings;
+        const personaTagsState = getPersonaTagsState(context);
         const editorSelection = getEditorSelection(context);
         const searchInput = document.getElementById(SEARCH_ID);
         const query = String(searchInput?.value || '').trim().toLowerCase();
@@ -311,24 +432,65 @@ ${item.description}` : item.description)
 
         for (const [id, name] of personas) {
             const title = String(name || id);
-            if (query && !title.toLowerCase().includes(query) && !id.toLowerCase().includes(query)) {
-                continue;
+            const description = String(power.persona_descriptions?.[id]?.description || '').trim();
+            const tagIds = personaTagsState?.tagMap?.[id] || [];
+            const tagNames = tagIds
+                .map((tagId) => personaTagsState?.tagsById?.[tagId]?.name)
+                .filter(Boolean);
+            const tooltip = description || '[No persona description]';
+            if (query) {
+                const matchesName = title.toLowerCase().includes(query);
+                const matchesId = id.toLowerCase().includes(query);
+                const matchesTags = tagNames.some((tagName) => String(tagName).toLowerCase().includes(query));
+                if (!matchesName && !matchesId && !matchesTags) {
+                    continue;
+                }
             }
+
+            const tooltipWithTags = tagNames.length
+                ? `${tooltip}\n\nTags: ${tagNames.join(', ')}`
+                : tooltip;
 
             const row = document.createElement('label');
             row.className = 'mpc-persona-row';
+            row.title = tooltipWithTags;
 
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.checked = editorSelection.includes(id);
             checkbox.addEventListener('change', () => togglePersonaSelection(context, id, checkbox.checked));
+            checkbox.title = tooltipWithTags;
+
+            const info = document.createElement('div');
+            info.className = 'mpc-persona-info';
 
             const text = document.createElement('span');
             text.className = 'mpc-persona-name';
             text.textContent = title;
-            text.title = id;
+            text.title = tooltipWithTags;
+            info.appendChild(text);
 
-            row.append(checkbox, text);
+            if (tagNames.length) {
+                const tagsWrap = document.createElement('div');
+                tagsWrap.className = 'mpc-tags';
+
+                for (const tagId of tagIds) {
+                    const tagObj = personaTagsState?.tagsById?.[tagId];
+                    if (!tagObj?.name) continue;
+
+                    const chip = document.createElement('span');
+                    chip.className = 'mpc-tag-label';
+                    chip.textContent = String(tagObj.name);
+                    if (tagObj.color) {
+                        chip.style.backgroundColor = String(tagObj.color);
+                    }
+                    tagsWrap.appendChild(chip);
+                }
+
+                info.appendChild(tagsWrap);
+            }
+
+            row.append(checkbox, info);
             list.appendChild(row);
         }
     }
@@ -351,34 +513,50 @@ ${item.description}` : item.description)
             root.id = PANEL_ID;
             root.innerHTML = `
                 <div class="mpc-header">Multi Persona Composer</div>
-                <label class="mpc-toggle"><input type="checkbox" id="mpc-enabled"> Enable composition</label>
-                <label class="mpc-toggle"><input type="checkbox" id="mpc-headers"> Show persona headers in merged prompt</label>
-                <div class="mpc-note">Main persona comes from normal SillyTavern selector. Selected items below are added on top.</div>
+                <div class="inline-drawer wide100p mpc-advanced-drawer">
+                    <div id="mpc-advanced-toggle" class="inline-drawer-toggle inline-drawer-header">
+                        <b>Advanced options</b>
+                        <div id="mpc-advanced-icon" class="inline-drawer-icon fa-solid"></div>
+                    </div>
+                    <div id="mpc-advanced-content" class="inline-drawer-content">
+                        <label class="mpc-toggle"><input type="checkbox" id="mpc-enabled"> Enable composition</label>
+                        <label class="mpc-toggle"><input type="checkbox" id="mpc-headers"> Show persona headers in merged prompt</label>
+                        <div class="mpc-note">Main persona comes from normal SillyTavern selector. Selected items below are added on top.</div>
+                    </div>
+                </div>
                 <div id="mpc-active-scope" class="mpc-scope-status"></div>
-                <div id="mpc-usage-scope" class="mpc-scope-status"></div>
+                <div class="inline-drawer wide100p mpc-usage-drawer">
+                    <div id="mpc-usage-toggle" class="inline-drawer-toggle inline-drawer-header">
+                        <b>Current selection usage</b>
+                        <div id="mpc-usage-icon" class="inline-drawer-icon fa-solid"></div>
+                    </div>
+                    <div id="mpc-usage-content" class="inline-drawer-content">
+                        <div id="mpc-usage-targets" class="mpc-scope-status"></div>
+                    </div>
+                </div>
                 <input id="${SEARCH_ID}" class="text_pole width100p flex1 margin0" type="search" placeholder="Filter personas...">
                 <div id="${LIST_ID}" class="mpc-persona-list"></div>
                 <div class="mpc-actions">
-                    <button id="mpc-save-default" class="menu_button interactable">Set default extras</button>
-                    <button id="mpc-save-character" class="menu_button interactable">Set character extras</button>
-                    <button id="mpc-save-chat" class="menu_button interactable">Set chat extras</button>
+                    <button id="mpc-save-default" class="menu_button interactable" title="Save the current checked extras as the global default set.">Set Default</button>
+                    <button id="mpc-save-character" class="menu_button interactable" title="Save the current checked extras for the current character or group.">Set Character</button>
+                    <button id="mpc-save-chat" class="menu_button interactable" title="Save the current checked extras for this chat only.">Set Chat</button>
                 </div>
                 <div class="mpc-actions">
-                    <button id="mpc-select-current" class="menu_button interactable">Use current as only extra</button>
-                    <button id="mpc-load-active" class="menu_button interactable">Load active</button>
-                    <button id="mpc-load-default" class="menu_button interactable">Load default</button>
-                    <button id="mpc-clear-character" class="menu_button interactable">Clear character lock</button>
-                    <button id="mpc-clear-chat" class="menu_button interactable">Clear chat lock</button>
-                    <button id="mpc-clear" class="menu_button interactable">Clear</button>
+                    <button id="mpc-load-active" class="menu_button interactable" title="Load the currently resolved extras source (chat > character > default).">Active</button>
+                    <button id="mpc-load-default" class="menu_button interactable" title="Load the global default extras into the editor selection.">Load Default</button>
+                    <button id="mpc-clear-character" class="menu_button interactable" title="Remove saved extras for the current character or group.">Clear Character</button>
+                    <button id="mpc-clear-chat" class="menu_button interactable" title="Remove saved extras for the current chat.">Clear Chat</button>
+                    <button id="mpc-clear" class="menu_button interactable" title="Clear only the current editor selection checkboxes. Does not delete saved chat/character/default sets.">Clear</button>
                 </div>
             `;
             anchor.parentElement.appendChild(root);
 
             const enabledInput = /** @type {HTMLInputElement | null} */ (document.getElementById('mpc-enabled'));
             const headersInput = /** @type {HTMLInputElement | null} */ (document.getElementById('mpc-headers'));
+            const advancedToggleButton = document.getElementById('mpc-advanced-toggle');
+            const usageToggleButton = document.getElementById('mpc-usage-toggle');
             const searchInput = document.getElementById(SEARCH_ID);
             const clearButton = document.getElementById('mpc-clear');
-            const selectCurrentButton = document.getElementById('mpc-select-current');
             const saveDefaultButton = document.getElementById('mpc-save-default');
             const saveCharacterButton = document.getElementById('mpc-save-character');
             const saveChatButton = document.getElementById('mpc-save-chat');
@@ -405,6 +583,38 @@ ${item.description}` : item.description)
                 });
             }
 
+            if (advancedToggleButton) {
+                advancedToggleButton.addEventListener('click', () => {
+                    const live = getContextSafe();
+                    if (!live) return;
+                    // Native inline drawer toggling happens in a delegated click listener.
+                    // Read the final state after that handler runs and persist it.
+                    setTimeout(() => {
+                        const content = document.getElementById('mpc-advanced-content');
+                        if (!(content instanceof HTMLElement)) {
+                            return;
+                        }
+                        const isExpanded = window.getComputedStyle(content).display !== 'none';
+                        setAdvancedExpanded(live, isExpanded);
+                    }, 0);
+                });
+            }
+
+            if (usageToggleButton) {
+                usageToggleButton.addEventListener('click', () => {
+                    const live = getContextSafe();
+                    if (!live) return;
+                    setTimeout(() => {
+                        const content = document.getElementById('mpc-usage-content');
+                        if (!(content instanceof HTMLElement)) {
+                            return;
+                        }
+                        const isExpanded = window.getComputedStyle(content).display !== 'none';
+                        setUsageExpanded(live, isExpanded);
+                    }, 0);
+                });
+            }
+
             if (searchInput) {
                 searchInput.addEventListener('input', () => {
                     const live = getContextSafe();
@@ -418,20 +628,6 @@ ${item.description}` : item.description)
                     const live = getContextSafe();
                     if (!live) return;
                     setEditorSelection(live, []);
-                    renderPersonaList(live);
-                    scheduleRenderPanel(20);
-                });
-            }
-
-            if (selectCurrentButton) {
-                selectCurrentButton.addEventListener('click', () => {
-                    const live = getContextSafe();
-                    if (!live) return;
-                    const selectedId = getCurrentlySelectedPersonaIdFromUI();
-                    if (!selectedId) {
-                        return;
-                    }
-                    setEditorSelection(live, [selectedId]);
                     renderPersonaList(live);
                     scheduleRenderPanel(20);
                 });
@@ -527,25 +723,45 @@ ${item.description}` : item.description)
         const settings = getSettings(context);
         const enabledInput = /** @type {HTMLInputElement | null} */ (document.getElementById('mpc-enabled'));
         const headersInput = /** @type {HTMLInputElement | null} */ (document.getElementById('mpc-headers'));
+        const advancedToggleButton = document.getElementById('mpc-advanced-toggle');
+        const advancedIcon = document.getElementById('mpc-advanced-icon');
+        const advancedContent = document.getElementById('mpc-advanced-content');
+        const usageToggleButton = document.getElementById('mpc-usage-toggle');
+        const usageIcon = document.getElementById('mpc-usage-icon');
+        const usageContent = document.getElementById('mpc-usage-content');
         const activeScope = document.getElementById('mpc-active-scope');
-        const usageScope = document.getElementById('mpc-usage-scope');
         if (enabledInput) {
             enabledInput.checked = !!settings.enabled;
         }
         if (headersInput) {
             headersInput.checked = !!settings.showHeaders;
         }
+        const advancedExpanded = getAdvancedExpanded(context);
+        if (advancedContent) {
+            advancedContent.style.display = advancedExpanded ? 'block' : 'none';
+        }
+        if (advancedToggleButton && advancedIcon) {
+            advancedIcon.classList.toggle('fa-circle-chevron-up', advancedExpanded);
+            advancedIcon.classList.toggle('up', advancedExpanded);
+            advancedIcon.classList.toggle('fa-circle-chevron-down', !advancedExpanded);
+            advancedIcon.classList.toggle('down', !advancedExpanded);
+        }
+        const usageExpanded = getUsageExpanded(context);
+        if (usageContent) {
+            usageContent.style.display = usageExpanded ? 'block' : 'none';
+        }
+        if (usageToggleButton && usageIcon) {
+            usageIcon.classList.toggle('fa-circle-chevron-up', usageExpanded);
+            usageIcon.classList.toggle('up', usageExpanded);
+            usageIcon.classList.toggle('fa-circle-chevron-down', !usageExpanded);
+            usageIcon.classList.toggle('down', !usageExpanded);
+        }
         if (activeScope) {
             const resolved = getResolvedExtraSelection(context);
             const count = resolved.ids.length;
             activeScope.textContent = `Active extras source: ${resolved.source} (${count} selected)`;
         }
-        if (usageScope) {
-            const labels = getUsageLabelsForEditorSelection(context);
-            usageScope.textContent = labels.length
-                ? `Current selection is used by: ${labels.join(', ')}`
-                : 'Current selection is not saved to chat/character/default.';
-        }
+        renderUsageTargets(context);
 
         renderPersonaList(context);
     }
