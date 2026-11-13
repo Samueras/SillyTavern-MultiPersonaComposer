@@ -17,10 +17,9 @@ Multi Persona Composer extends SillyTavern persona management by keeping the nor
 ## How It Works
 
 - The main persona comes from SillyTavern's normal persona selector.
-- During generation, this extension temporarily composes:
-  - main persona description
-  - plus selected extras from the active scope
-- After generation ends/stops, the extension restores original persona prompt values.
+- SillyTavern supplies the main persona normally. During generation, the extension injects the extras separately without changing saved persona settings.
+- In story-string / Prompt Manager mode, extras are a separate extension prompt. At depth they use the main persona's depth and role. With Author's Note placement they use the note's settings and interval, but may appear as a separate block.
+- When headers are enabled, extras receive headers; the native main persona remains unchanged.
 
 ## Installation
 

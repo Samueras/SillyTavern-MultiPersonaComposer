@@ -10,8 +10,7 @@
     }
     window.__multiPersonaComposerLoaded = true;
 
-    /** @type {null | { description: string, position: number, depth: number, role: number, lorebook: string }} */
-    let originalPersonaState = null;
+    const PROMPT_KEY = 'multi_persona_composer_extras';
     let renderScheduled = false;
 
     function getContextSafe() {
@@ -210,95 +209,50 @@
         return '';
     }
 
-    function composePersona(context) {
+    // Keep saved persona settings unchanged throughout generation.
+    function applyPersonaInjection() {
+        const context = getContextSafe();
+        if (!context || typeof context.setExtensionPrompt !== 'function') return;
+        clearPersonaInjection();
         const settings = getSettings(context);
         const power = context.powerUserSettings;
-        const mainPersonaId = getMainPersonaId(context);
-        const resolved = getResolvedExtraSelection(context);
-        const selectedExtras = resolved.ids.filter(id => id !== mainPersonaId);
-        const composeOrder = [mainPersonaId, ...selectedExtras].filter(Boolean);
-
-        if (!settings.enabled || composeOrder.length === 0) {
-            return null;
+        const personaPosition = Number(power.persona_description_position ?? 0);
+        if (!settings.enabled || personaPosition === 9) return;
+        const mainId = getMainPersonaId(context);
+        const extras = getResolvedExtraSelection(context).ids
+            .filter(id => id !== mainId)
+            .map(id => ({ name: power.personas[id] || id, description: String(power.persona_descriptions?.[id]?.description || '').trim() }))
+            .filter(item => item.description);
+        if (!extras.length) return;
+        const text = extras.map(item => settings.showHeaders ? `[${item.name}]
+${item.description}` : item.description)
+            .join(settings.separator || '\n');
+        let position = 0;
+        let depth = 0;
+        let role = 0;
+        if (personaPosition === 4) {
+            position = 1;
+            depth = Number(power.persona_description_depth ?? 2);
+            role = Number(power.persona_description_role ?? 0);
+        } else if (personaPosition === 2 || personaPosition === 3) {
+            const metadata = context.chatMetadata || {};
+            const note = context.extensionSettings.note || {};
+            const interval = Number(metadata.note_interval ?? note.defaultInterval ?? 1);
+            let userMessages = (context.chat || []).filter(message => message.is_user).length;
+            if (interval === 1) userMessages = 1;
+            if (interval <= 0 || userMessages <= 0 || userMessages % interval !== 0) return;
+            position = Number(metadata.note_position ?? note.defaultPosition ?? 1);
+            depth = Number(metadata.note_depth ?? note.defaultDepth ?? 4);
+            role = Number(metadata.note_role ?? note.defaultRole ?? 0);
         }
-
-        const selectedDescriptors = composeOrder
-            .map((id) => {
-                const descriptor = power.persona_descriptions?.[id] || {};
-                return {
-                    id,
-                    name: power.personas[id] || id,
-                    description: String(descriptor.description || '').trim(),
-                    position: descriptor.position,
-                    depth: descriptor.depth,
-                    role: descriptor.role,
-                    lorebook: descriptor.lorebook,
-                };
-            })
-            .filter((item) => item.description.length > 0);
-
-        if (selectedDescriptors.length === 0) {
-            return null;
-        }
-
-        const combinedText = selectedDescriptors
-            .map((item) => settings.showHeaders ? `[${item.name}]\n${item.description}` : item.description)
-            .join(settings.separator || '\n\n');
-
-        const mainDescriptor = selectedDescriptors[0];
-        return {
-            description: combinedText,
-            position: Number(mainDescriptor.position ?? power.persona_description_position ?? 0),
-            depth: Number(mainDescriptor.depth ?? power.persona_description_depth ?? 2),
-            role: Number(mainDescriptor.role ?? power.persona_description_role ?? 0),
-            lorebook: String(mainDescriptor.lorebook ?? power.persona_description_lorebook ?? ''),
-        };
+        context.setExtensionPrompt(PROMPT_KEY, text, position, depth, true, role);
     }
 
-    async function applyPersonaOverride() {
+    function clearPersonaInjection() {
         const context = getContextSafe();
-        if (!context) {
-            return;
+        if (context && typeof context.setExtensionPrompt === 'function') {
+            context.setExtensionPrompt(PROMPT_KEY, '', 0, 0);
         }
-
-        const power = context.powerUserSettings;
-        const composed = composePersona(context);
-
-        if (!composed) {
-            await restorePersonaOverride();
-            return;
-        }
-
-        if (!originalPersonaState) {
-            originalPersonaState = {
-                description: String(power.persona_description || ''),
-                position: Number(power.persona_description_position ?? 0),
-                depth: Number(power.persona_description_depth ?? 2),
-                role: Number(power.persona_description_role ?? 0),
-                lorebook: String(power.persona_description_lorebook ?? ''),
-            };
-        }
-
-        power.persona_description = composed.description;
-        power.persona_description_position = composed.position;
-        power.persona_description_depth = composed.depth;
-        power.persona_description_role = composed.role;
-        power.persona_description_lorebook = composed.lorebook;
-    }
-
-    async function restorePersonaOverride() {
-        const context = getContextSafe();
-        if (!context || !originalPersonaState) {
-            return;
-        }
-
-        const power = context.powerUserSettings;
-        power.persona_description = originalPersonaState.description;
-        power.persona_description_position = originalPersonaState.position;
-        power.persona_description_depth = originalPersonaState.depth;
-        power.persona_description_role = originalPersonaState.role;
-        power.persona_description_lorebook = originalPersonaState.lorebook;
-        originalPersonaState = null;
     }
 
     function togglePersonaSelection(context, personaId, checked) {
@@ -613,9 +567,9 @@
             return;
         }
 
-        context.eventSource.on(context.eventTypes.GENERATION_ENDED, restorePersonaOverride);
-        context.eventSource.on(context.eventTypes.GENERATION_STOPPED, restorePersonaOverride);
-        context.eventSource.on(context.eventTypes.CHAT_CHANGED, restorePersonaOverride);
+        context.eventSource.on(context.eventTypes.GENERATION_ENDED, clearPersonaInjection);
+        context.eventSource.on(context.eventTypes.GENERATION_STOPPED, clearPersonaInjection);
+        context.eventSource.on(context.eventTypes.CHAT_CHANGED, clearPersonaInjection);
         context.eventSource.on(context.eventTypes.CHAT_CHANGED, () => scheduleRenderPanel(150));
 
         // Re-render when persona drawer is toggled or when selecting persona cards.
@@ -672,7 +626,7 @@
     }
 
     window.multi_persona_compose_interceptor = async function () {
-        await applyPersonaOverride();
+        applyPersonaInjection();
     };
 
     if (document.readyState === 'loading') {
